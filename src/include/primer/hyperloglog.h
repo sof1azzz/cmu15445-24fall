@@ -22,7 +22,7 @@
 #include "common/util/hash_util.h"
 
 /** @brief Capacity of the bitset stream. */
-#define BITSET_CAPACITY 64
+enum : std::uint8_t { BITSET_CAPACITY = 64 };
 
 namespace bustub {
 
@@ -55,9 +55,9 @@ class HyperLogLog {
    * @param[in] val - value
    * @returns hash integer of given input value
    */
-  inline auto CalculateHash(KeyType val) -> hash_t {
+  auto CalculateHash(KeyType val) -> hash_t {
     Value val_obj;
-    if constexpr (std::is_same<KeyType, std::string>::value) {
+    if constexpr (std::is_same_v<KeyType, std::string>) {
       val_obj = Value(VARCHAR, val);
     } else {
       val_obj = Value(BIGINT, val);
@@ -73,6 +73,9 @@ class HyperLogLog {
   size_t cardinality_;
 
   /** @todo (student) can add their data structures that support HyperLogLog */
+  int16_t n_bits_;
+  std::vector<uint64_t> buckets_;
+  std::mutex buckets_lock_;
 };
 
 }  // namespace bustub

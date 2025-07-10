@@ -24,12 +24,13 @@
 #include "common/util/hash_util.h"
 
 /** @brief Dense bucket size. */
-#define DENSE_BUCKET_SIZE 4
-/** @brief Overflow bucket size. */
-#define OVERFLOW_BUCKET_SIZE 3
-
-/** @brief Total bucket size. */
-#define TOTAL_BUCKET_SIZE (DENSE_BUCKET_SIZE + OVERFLOW_BUCKET_SIZE)
+enum : std::uint8_t {
+  DENSE_BUCKET_SIZE = 4,
+  /** @brief Overflow bucket size. */
+  OVERFLOW_BUCKET_SIZE = 3,
+  /** @brief Total bucket size. */
+  TOTAL_BUCKET_SIZE = (DENSE_BUCKET_SIZE + OVERFLOW_BUCKET_SIZE)
+};
 
 namespace bustub {
 
@@ -70,13 +71,13 @@ class HyperLogLogPresto {
    *
    * @returns hash value
    */
-  inline auto CalculateHash(KeyType val) -> hash_t {
+  auto CalculateHash(KeyType val) -> hash_t {
     Value val_obj;
-    if constexpr (std::is_same<KeyType, std::string>::value) {
+    if constexpr (std::is_same_v<KeyType, std::string>) {
       val_obj = Value(VARCHAR, val);
       return bustub::HashUtil::HashValue(&val_obj);
     }
-    if constexpr (std::is_same<KeyType, int64_t>::value) {
+    if constexpr (std::is_same_v<KeyType, int64_t>) {
       return static_cast<hash_t>(val);
     }
     return 0;
@@ -91,7 +92,7 @@ class HyperLogLogPresto {
   /** @brief Storing cardinality value */
   uint64_t cardinality_;
 
-  // TODO(student) - can add more data structures as required
+  int leading_bits_;
 };
 
 }  // namespace bustub

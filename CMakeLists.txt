@@ -258,6 +258,10 @@ add_custom_target(fix-clang-tidy-diff
 set(P0_FILES
         "src/include/primer/skiplist.h"
         "src/primer/skiplist.cpp"
+        "src/primer/hyperloglog.cpp"
+        "src/primer/hyperloglog_presto.cpp"
+        "src/include/primer/hyperloglog.h"
+        "src/include/primer/hyperloglog_presto.h"
 )
 
 add_custom_target(check-clang-tidy-p0
@@ -266,9 +270,13 @@ add_custom_target(check-clang-tidy-p0
         -p ${CMAKE_BINARY_DIR} # using cmake's generated compile commands
         ${P0_FILES}
 )
+#add_custom_target(submit-p0
+#        zip project0-submission.zip
+#        ${P0_FILES}
+#        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+#)
 add_custom_target(submit-p0
-        zip project0-submission.zip
-        ${P0_FILES}
+        COMMAND zip project0-submission.zip ${P0_FILES}
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 

@@ -113,7 +113,7 @@ class SkipList {
   std::mt19937 rng_{Seed};
 
   /** @brief A reader-writer latch protecting the skip list. */
-  std::shared_mutex rwlock_{};
+  std::shared_mutex rwlock_;
 };
 
 /**
