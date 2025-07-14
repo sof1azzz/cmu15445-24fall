@@ -12,10 +12,13 @@
 
 #pragma once
 
+#include <functional>
 #include <limits>
 #include <list>
+#include <memory>
 #include <mutex>  // NOLINT
 #include <optional>
+#include <set>
 #include <unordered_map>
 #include <vector>
 
@@ -27,14 +30,14 @@ namespace bustub {
 enum class AccessType { Unknown = 0, Lookup, Scan, Index };
 
 class LRUKNode {
- private:
+ public:
   /** History of last seen K timestamps of this page. Least recent timestamp stored in front. */
   // Remove maybe_unused if you start using them. Feel free to change the member variables as you want.
-
-  [[maybe_unused]] std::list<size_t> history_;
-  [[maybe_unused]] size_t k_;
-  [[maybe_unused]] frame_id_t fid_;
-  [[maybe_unused]] bool is_evictable_{false};
+  explicit LRUKNode(frame_id_t fid) : fid_(fid) {}
+  std::list<size_t> history_;
+  [[maybe_unused]] size_t k_{};
+  frame_id_t fid_;
+  bool is_evictable_{false};
 };
 
 /**
@@ -69,17 +72,22 @@ class LRUKReplacer {
 
   void Remove(frame_id_t frame_id);
 
-  auto Size() -> size_t;
+  auto Size() const -> size_t;
 
  private:
+  void Update(const std::shared_ptr<LRUKNode> &node);
+
   // TODO(student): implement me! You can replace these member variables as you like.
   // Remove maybe_unused if you start using them.
-  [[maybe_unused]] std::unordered_map<frame_id_t, LRUKNode> node_store_;
-  [[maybe_unused]] size_t current_timestamp_{0};
-  [[maybe_unused]] size_t curr_size_{0};
-  [[maybe_unused]] size_t replacer_size_;
-  [[maybe_unused]] size_t k_;
-  [[maybe_unused]] std::mutex latch_;
+  std::unordered_map<frame_id_t, std::shared_ptr<LRUKNode>> node_store_;
+  size_t current_timestamp_{0};
+  size_t curr_size_{0};
+  size_t replacer_size_;
+  size_t k_;
+  std::mutex latch_;
+  std::set<std::shared_ptr<LRUKNode>,
+           std::function<bool(const std::shared_ptr<LRUKNode> &, const std::shared_ptr<LRUKNode> &)>>
+      node_set_;
 };
 
 }  // namespace bustub
