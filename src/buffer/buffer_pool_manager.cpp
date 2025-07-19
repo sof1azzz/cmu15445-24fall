@@ -21,7 +21,10 @@ namespace bustub {
  *
  * @param frame_id The frame ID / index of the frame we are creating a header for.
  */
-FrameHeader::FrameHeader(frame_id_t frame_id) : frame_id_(frame_id), data_(BUSTUB_PAGE_SIZE, 0) { Reset(); }
+FrameHeader::FrameHeader(frame_id_t frame_id)
+    : frame_id_(frame_id), data_(BUSTUB_PAGE_SIZE, 0), page_id_(INVALID_PAGE_ID) {
+  Reset();
+}
 
 /**
  * @brief Get a raw const pointer to the frame's data.
@@ -44,6 +47,7 @@ void FrameHeader::Reset() {
   std::fill(data_.begin(), data_.end(), 0);
   pin_count_.store(0);
   is_dirty_ = false;
+  page_id_ = INVALID_PAGE_ID;
 }
 
 /**
@@ -116,7 +120,65 @@ auto BufferPoolManager::Size() const -> size_t { return num_frames_; }
  *
  * @return The page ID of the newly allocated page.
  */
-auto BufferPoolManager::NewPage() -> page_id_t { UNIMPLEMENTED("TODO(P1): Add implementation."); }
+auto BufferPoolManager::NewPage() -> page_id_t {
+  std::scoped_lock latch(*bpm_latch_);
+  frame_id_t frame_id;
+
+  if (!free_frames_.empty()) {
+    frame_id = free_frames_.front();
+    free_frames_.pop_front();
+  } else {
+    const auto opt = replacer_->Evict();
+    if (opt == std::nullopt) {
+      return INVALID_PAGE_ID;
+    }
+
+    frame_id = opt.value();
+    const auto &frame = frames_[frame_id];
+    const page_id_t old_page_id = frame->page_id_;
+
+    // 如果旧页是脏的，则写回
+    // 直接将页面数据写回磁盘
+    auto promise = disk_scheduler_->CreatePromise();
+    auto future = promise.get_future();
+    disk_scheduler_->Schedule({/*is_write=*/true, frame->GetDataMut(), old_page_id, std::move(promise)});
+    if (!future.get()) {
+      return INVALID_PAGE_ID;
+    }
+
+    page_table_.erase(old_page_id);
+    frame->Reset();
+  }
+
+  // 只有在成功获取 frame 后才分配 page_id
+  const page_id_t page_id = next_page_id_.fetch_add(1);
+
+  // 更新新页元信息
+  const auto &new_frame = frames_[frame_id];
+  new_frame->page_id_ = page_id;
+  // 刚创建的新页面当前没有被任何线程持有，因此 pin 计数应当从 0 开始。
+  new_frame->pin_count_.store(0);
+
+  page_table_[page_id] = frame_id;
+  replacer_->RecordAccess(frame_id);
+  // 新建页面在被首次访问前不应该被驱逐，因此仍然标记为不可驱逐。
+  replacer_->SetEvictable(frame_id, false);
+
+  // 将新页面写入磁盘以确保持久化
+  auto promise = disk_scheduler_->CreatePromise();
+  auto future = promise.get_future();
+  disk_scheduler_->Schedule({/*is_write=*/true, new_frame->GetDataMut(), page_id, std::move(promise)});
+
+  if (!future.get()) {
+    // 磁盘写入失败，需要清理
+    page_table_.erase(page_id);
+    new_frame->Reset();
+    free_frames_.push_back(frame_id);
+    return INVALID_PAGE_ID;
+  }
+
+  return page_id;
+}
 
 /**
  * @brief Removes a page from the database, both on disk and in memory.
@@ -137,7 +199,31 @@ auto BufferPoolManager::NewPage() -> page_id_t { UNIMPLEMENTED("TODO(P1): Add im
  * @param page_id The page ID of the page we want to delete.
  * @return `false` if the page exists but could not be deleted, `true` if the page didn't exist or deletion succeeded.
  */
-auto BufferPoolManager::DeletePage(page_id_t page_id) -> bool { UNIMPLEMENTED("TODO(P1): Add implementation."); }
+auto BufferPoolManager::DeletePage(page_id_t page_id) -> bool {
+  std::scoped_lock latch(*bpm_latch_);
+
+  const auto it = page_table_.find(page_id);
+  if (it == page_table_.end()) {
+    return true;  // 页面不存在，认为删除成功
+  }
+
+  frame_id_t frame_id = it->second;
+  auto &frame = frames_[frame_id];
+
+  if (frame->pin_count_.load() > 0) {
+    return false;  // 页面被 pinned，无法删除
+  }
+
+  // 从磁盘删除
+  disk_scheduler_->DeallocatePage(page_id);
+
+  // 从内存删除
+  page_table_.erase(page_id);
+  frame->Reset();
+  free_frames_.push_back(frame_id);
+
+  return true;
+}
 
 /**
  * @brief Acquires an optional write-locked guard over a page of data. The user can specify an `AccessType` if needed.
@@ -179,7 +265,72 @@ auto BufferPoolManager::DeletePage(page_id_t page_id) -> bool { UNIMPLEMENTED("T
  * returns `std::nullopt`, otherwise returns a `WritePageGuard` ensuring exclusive and mutable access to a page's data.
  */
 auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_type) -> std::optional<WritePageGuard> {
-  UNIMPLEMENTED("TODO(P1): Add implementation.");
+  // 若请求的 page_id 非法，直接返回失败。
+  if (page_id == INVALID_PAGE_ID) {
+    return std::nullopt;
+  }
+  std::unique_lock latch(*bpm_latch_);
+
+  if (const auto it = page_table_.find(page_id); it != page_table_.end()) {
+    const auto &frame = frames_[it->second];
+    frame->pin_count_.fetch_add(1);
+    replacer_->RecordAccess(it->second);
+    replacer_->SetEvictable(it->second, false);
+
+    latch.unlock();
+    frame->rwlatch_.lock();
+
+    return WritePageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
+  }
+
+  frame_id_t frame_id;
+  if (!free_frames_.empty()) {
+    frame_id = free_frames_.front();
+    free_frames_.pop_front();
+  } else {
+    const auto opt = replacer_->Evict();
+    if (opt == std::nullopt) {
+      return std::nullopt;
+    }
+
+    frame_id = opt.value();
+    const auto &frame = frames_[frame_id];
+    const page_id_t old_page_id = frame->page_id_;
+
+    // 如果旧页是脏的，则写回
+    if (frame->is_dirty_) {
+      // 直接将页面数据写回磁盘
+      auto promise = disk_scheduler_->CreatePromise();
+      auto future = promise.get_future();
+      disk_scheduler_->Schedule({/*is_write=*/true, frame->GetDataMut(), old_page_id, std::move(promise)});
+      if (!future.get()) {
+        return std::nullopt;
+      }
+    }
+
+    page_table_.erase(old_page_id);
+    frame->Reset();
+  }
+
+  const auto &frame = frames_[frame_id];
+  frame->page_id_ = page_id;
+  frame->pin_count_.fetch_add(1);
+
+  auto promise = disk_scheduler_->CreatePromise();
+  auto future = promise.get_future();
+  disk_scheduler_->Schedule({false, frame->GetDataMut(), page_id, std::move(promise)});
+  if (!future.get()) {
+    return std::nullopt;
+  }
+
+  page_table_[page_id] = frame_id;
+  replacer_->RecordAccess(frame_id);
+  replacer_->SetEvictable(frame_id, false);
+
+  latch.unlock();
+  frame->rwlatch_.lock();
+
+  return WritePageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
 }
 
 /**
@@ -207,7 +358,71 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
  * returns `std::nullopt`, otherwise returns a `ReadPageGuard` ensuring shared and read-only access to a page's data.
  */
 auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_type) -> std::optional<ReadPageGuard> {
-  UNIMPLEMENTED("TODO(P1): Add implementation.");
+  // 若请求的 page_id 非法，直接返回失败。
+  if (page_id == INVALID_PAGE_ID) {
+    return std::nullopt;
+  }
+  std::unique_lock latch(*bpm_latch_);
+  if (const auto it = page_table_.find(page_id); it != page_table_.end()) {
+    const auto &frame = frames_[it->second];
+    frame->pin_count_.fetch_add(1);
+    replacer_->RecordAccess(it->second);
+    replacer_->SetEvictable(it->second, false);
+
+    latch.unlock();
+    frame->rwlatch_.lock_shared();
+
+    return ReadPageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
+  }
+
+  frame_id_t frame_id;
+  if (!free_frames_.empty()) {
+    frame_id = free_frames_.front();
+    free_frames_.pop_front();
+  } else {
+    const auto opt = replacer_->Evict();
+    if (opt == std::nullopt) {
+      return std::nullopt;
+    }
+
+    frame_id = opt.value();
+    const auto &frame = frames_[frame_id];
+    const page_id_t old_page_id = frame->page_id_;
+
+    // 如果旧页是脏的，则写回
+    if (frame->is_dirty_) {
+      // 直接将页面数据写回磁盘
+      auto promise = disk_scheduler_->CreatePromise();
+      auto future = promise.get_future();
+      disk_scheduler_->Schedule({/*is_write=*/true, frame->GetDataMut(), old_page_id, std::move(promise)});
+      if (!future.get()) {
+        return std::nullopt;
+      }
+    }
+
+    page_table_.erase(old_page_id);
+    frame->Reset();
+  }
+
+  const auto &frame = frames_[frame_id];
+  frame->page_id_ = page_id;
+  frame->pin_count_.fetch_add(1);
+
+  auto promise = disk_scheduler_->CreatePromise();
+  auto future = promise.get_future();
+  disk_scheduler_->Schedule({false, frame->GetDataMut(), page_id, std::move(promise)});
+  if (!future.get()) {
+    return std::nullopt;
+  }
+
+  page_table_[page_id] = frame_id;
+  replacer_->RecordAccess(frame_id);
+  replacer_->SetEvictable(frame_id, false);
+
+  latch.unlock();
+  frame->rwlatch_.lock_shared();
+
+  return ReadPageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
 }
 
 /**
@@ -279,7 +494,27 @@ auto BufferPoolManager::ReadPage(page_id_t page_id, AccessType access_type) -> R
  * @param page_id The page ID of the page to be flushed.
  * @return `false` if the page could not be found in the page table, otherwise `true`.
  */
-auto BufferPoolManager::FlushPageUnsafe(page_id_t page_id) -> bool { UNIMPLEMENTED("TODO(P1): Add implementation."); }
+auto BufferPoolManager::FlushPageUnsafe(page_id_t page_id) -> bool {
+  const auto it = page_table_.find(page_id);
+  if (it == page_table_.end()) {
+    return false;
+  }
+
+  const auto &frame = frames_[it->second];
+  if (frame->is_dirty_) {
+    auto promise = disk_scheduler_->CreatePromise();
+    auto future = promise.get_future();
+
+    // 使用 const_cast 转换类型，因为磁盘写入不会修改数据
+    disk_scheduler_->Schedule({true, const_cast<char *>(frame->GetData()), page_id, std::move(promise)});
+
+    if (future.get()) {
+      // 写入成功，清除脏标记
+      frame->is_dirty_ = false;
+    }
+  }
+  return true;
+}
 
 /**
  * @brief Flushes a page's data out to disk safely.
@@ -299,7 +534,28 @@ auto BufferPoolManager::FlushPageUnsafe(page_id_t page_id) -> bool { UNIMPLEMENT
  * @param page_id The page ID of the page to be flushed.
  * @return `false` if the page could not be found in the page table, otherwise `true`.
  */
-auto BufferPoolManager::FlushPage(page_id_t page_id) -> bool { UNIMPLEMENTED("TODO(P1): Add implementation."); }
+auto BufferPoolManager::FlushPage(page_id_t page_id) -> bool {
+  std::scoped_lock latch(*bpm_latch_);
+  const auto it = page_table_.find(page_id);
+  if (it == page_table_.end()) {
+    return false;
+  }
+
+  const auto &frame = frames_[it->second];
+  if (frame->is_dirty_) {
+    auto promise = disk_scheduler_->CreatePromise();
+    auto future = promise.get_future();
+
+    // 使用 const_cast 转换类型，因为磁盘写入不会修改数据
+    disk_scheduler_->Schedule({true, const_cast<char *>(frame->GetData()), page_id, std::move(promise)});
+
+    if (future.get()) {
+      // 写入成功，清除脏标记
+      frame->is_dirty_ = false;
+    }
+  }
+  return true;
+}
 
 /**
  * @brief Flushes all page data that is in memory to disk unsafely.
@@ -314,7 +570,11 @@ auto BufferPoolManager::FlushPage(page_id_t page_id) -> bool { UNIMPLEMENTED("TO
  *
  * TODO(P1): Add implementation
  */
-void BufferPoolManager::FlushAllPagesUnsafe() { UNIMPLEMENTED("TODO(P1): Add implementation."); }
+void BufferPoolManager::FlushAllPagesUnsafe() {
+  for (auto &[k, v] : page_table_) {
+    FlushPageUnsafe(k);
+  }
+}
 
 /**
  * @brief Flushes all page data that is in memory to disk safely.
@@ -328,7 +588,22 @@ void BufferPoolManager::FlushAllPagesUnsafe() { UNIMPLEMENTED("TODO(P1): Add imp
  *
  * TODO(P1): Add implementation
  */
-void BufferPoolManager::FlushAllPages() { UNIMPLEMENTED("TODO(P1): Add implementation."); }
+void BufferPoolManager::FlushAllPages() {
+  std::unique_lock latch(*bpm_latch_);
+
+  // 先收集所有页面 ID，然后释放锁再 flush
+  std::vector<page_id_t> page_ids;
+  for (const auto &[page_id, frame_id] : page_table_) {
+    page_ids.push_back(page_id);
+  }
+
+  latch.unlock();  // 释放锁
+
+  // 现在可以安全地 flush 每个页面
+  for (page_id_t page_id : page_ids) {
+    FlushPage(page_id);  // 使用 FlushPage 而不是 FlushPageUnsafe
+  }
+}
 
 /**
  * @brief Retrieves the pin count of a page. If the page does not exist in memory, return `std::nullopt`.
@@ -355,7 +630,13 @@ void BufferPoolManager::FlushAllPages() { UNIMPLEMENTED("TODO(P1): Add implement
  * @return std::optional<size_t> The pin count if the page exists, otherwise `std::nullopt`.
  */
 auto BufferPoolManager::GetPinCount(page_id_t page_id) -> std::optional<size_t> {
-  UNIMPLEMENTED("TODO(P1): Add implementation.");
+  std::scoped_lock latch(*bpm_latch_);
+  const auto it = page_table_.find(page_id);
+  if (it == page_table_.end()) {
+    return std::nullopt;
+  }
+
+  return frames_[it->second]->pin_count_.load();
 }
 
 }  // namespace bustub

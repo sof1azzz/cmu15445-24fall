@@ -40,10 +40,7 @@ DiskScheduler::~DiskScheduler() {
  *
  * @param r The request to be scheduled.
  */
-void DiskScheduler::Schedule(DiskRequest r) {
-  // std::unique_lock<std::mutex> lock(mutex_);
-  request_queue_.Put(std::make_optional<DiskRequest>(std::move(r)));
-}
+void DiskScheduler::Schedule(DiskRequest r) { request_queue_.Put(std::make_optional<DiskRequest>(std::move(r))); }
 
 /**
  * TODO(P1): Add implementation
@@ -55,7 +52,6 @@ void DiskScheduler::Schedule(DiskRequest r) {
  */
 void DiskScheduler::StartWorkerThread() {
   while (true) {
-    // std::lock_guard<std::mutex> lk(mutex_);
     if (auto curr_req = request_queue_.Get(); curr_req.has_value()) {
       if (curr_req->is_write_) {
         disk_manager_->WritePage(curr_req->page_id_, curr_req->data_);
