@@ -124,6 +124,10 @@ class BPlusTree {
 
   auto ToPrintableBPlusTree(page_id_t root_id) -> PrintableBPlusTree;
 
+  auto InternalLowerBound(const InternalPage *internal, const KeyType &target) -> int;
+
+  void RemoveKeyAndRebalance(const KeyType &key, Context &ctx);
+
   // member variable
   std::string index_name_;
   BufferPoolManager *bpm_;

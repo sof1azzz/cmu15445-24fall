@@ -60,7 +60,25 @@ class BPlusTreeLeafPage : public BPlusTreePage {
   // Helper methods
   auto GetNextPageId() const -> page_id_t;
   void SetNextPageId(page_id_t next_page_id);
-  auto KeyAt(int index) const -> KeyType;
+  auto KeyAt(int index) const -> const KeyType &;
+
+  auto SetKeyAt(int index, const KeyType &key) -> void { key_array_[index] = key; };
+
+  /**
+   * Return the value (RID) stored at slot index.
+   * @param index The slot index within the leaf page
+   * @return The RID stored at the specified slot
+   */
+  auto ValueAt(int index) const -> const ValueType & { return rid_array_[index]; }
+
+  /**
+   * Set the value (RID) at the specified slot.
+   * This helper is not strictly required for the current project stages but
+   * is useful for future modifications.
+   */
+  void SetValueAt(int index, const ValueType &val) { rid_array_[index] = val; }
+
+  auto GetValueAt(int index) const -> ValueType { return rid_array_[index]; }
 
   /**
    * @brief For test only return a string representing all keys in

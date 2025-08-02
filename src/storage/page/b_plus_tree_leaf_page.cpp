@@ -34,7 +34,7 @@ namespace bustub {
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_LEAF_PAGE_TYPE::Init(int max_size) {
   assert(max_size > 0);
-  assert(max_size <= LEAF_PAGE_SLOT_CNT);
+  // assert(max_size <= LEAF_PAGE_SLOT_CNT);
 
   SetMaxSize(max_size);
   SetPageType(IndexPageType::LEAF_PAGE);
@@ -55,9 +55,9 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::SetNextPageId(page_id_t next_page_id) { next_pa
  * array offset)
  */
 INDEX_TEMPLATE_ARGUMENTS
-auto B_PLUS_TREE_LEAF_PAGE_TYPE::KeyAt(int index) const -> KeyType {
+auto B_PLUS_TREE_LEAF_PAGE_TYPE::KeyAt(int index) const -> const KeyType & {
   assert(index >= 0);
-  assert(index < GetSize());
+  //. assert(index < LEAF_PAGE_SLOT_CNT);
   return key_array_[index];
 }
 

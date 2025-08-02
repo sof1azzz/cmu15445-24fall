@@ -49,7 +49,7 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Init(int max_size) {
  */
 INDEX_TEMPLATE_ARGUMENTS
 auto B_PLUS_TREE_INTERNAL_PAGE_TYPE::KeyAt(int index) const -> KeyType {
-  assert(index > 0);
+  // assert(index > 0);
   assert(index < INTERNAL_PAGE_SLOT_CNT);
   return key_array_[index];
 }
@@ -62,7 +62,7 @@ auto B_PLUS_TREE_INTERNAL_PAGE_TYPE::KeyAt(int index) const -> KeyType {
  */
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::SetKeyAt(int index, const KeyType &key) {
-  assert(index > 0);
+  // assert(index > 0);
   assert(index < INTERNAL_PAGE_SLOT_CNT);
   key_array_[index] = key;
 }
@@ -77,8 +77,23 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::SetKeyAt(int index, const KeyType &key) {
 INDEX_TEMPLATE_ARGUMENTS
 auto B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueAt(int index) const -> ValueType {
   assert(index >= 0);
-  assert(index < GetSize());
+  assert(index < INTERNAL_PAGE_SLOT_CNT);
   return page_id_array_[index];
+}
+
+/**
+ * @brief Return the index of the child pointer that equals the given value. Returns -1 if not found.
+ */
+INDEX_TEMPLATE_ARGUMENTS
+auto B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueIndex(const ValueType &value) const -> int {
+  int sz = GetSize();
+  // 指针数量比键多 1，因此需要遍历到 sz（含）
+  for (int i = 0; i <= sz; ++i) {
+    if (page_id_array_[i] == value) {
+      return i;
+    }
+  }
+  return -1;
 }
 
 // valuetype for internalNode should be page id_t

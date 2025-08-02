@@ -58,6 +58,9 @@ class BPlusTreePage {
   void SetMaxSize(int max_size);
   auto GetMinSize() const -> int;
 
+  void IncreaseSize() { SetSize(GetSize() + 1); }
+  void DecreaseSize() { SetSize(GetSize() - 1); }
+
   /*
    * TODO(P2): Remove __attribute__((__unused__)) if you intend to use the fields.
    */

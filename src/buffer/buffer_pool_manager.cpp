@@ -593,6 +593,7 @@ void BufferPoolManager::FlushAllPages() {
 
   // 先收集所有页面 ID，然后释放锁再 flush
   std::vector<page_id_t> page_ids;
+  page_ids.reserve(page_table_.size());
   for (const auto &[page_id, frame_id] : page_table_) {
     page_ids.push_back(page_id);
   }
